@@ -1,5 +1,6 @@
 import { colors, join } from "../src/server/deps.ts";
 import {
+  assert,
   assertEquals,
   assertMatch,
   assertNotMatch,
@@ -7,6 +8,18 @@ import {
 import versions from "../versions.json" assert { type: "json" };
 import { CheckFile } from "$fresh/src/dev/update_check.ts";
 import { WEEK } from "$fresh/src/dev/deps.ts";
+
+function getStdOutput(
+  out: Deno.CommandOutput,
+): { stdout: string; stderr: string } {
+  const decoder = new TextDecoder();
+  const stdout = colors.stripColor(decoder.decode(out.stdout));
+
+  const decoderErr = new TextDecoder();
+  const stderr = colors.stripColor(decoderErr.decode(out.stderr));
+
+  return { stdout, stderr };
+}
 
 Deno.test({
   name: "stores update check file in $HOME/fresh",
@@ -210,7 +223,7 @@ Deno.test({
       env: {
         HOME: tmpDirName,
         LATEST_VERSION: versions[0],
-        CURRENT_VERSION: "99999.9999.00",
+        CURRENT_VERSION: "99999.9999.0",
       },
     }).output();
 
@@ -219,5 +232,64 @@ Deno.test({
     assertNotMatch(stdout, /Fresh .* is available/);
 
     await Deno.remove(tmpDirName, { recursive: true });
+  },
+});
+
+Deno.test({
+  name: "only shows update message when once per interval",
+  async fn(t) {
+    await t.step("migrates to new last_shown property", async () => {
+      const tmpDirName = await Deno.makeTempDir();
+
+      const checkFile: CheckFile = {
+        current_version: "9999.999.0",
+        latest_version: "1.2.0",
+        last_checked: new Date().toISOString(),
+      };
+
+      await Deno.writeTextFile(
+        join(tmpDirName, "latest.json"),
+        JSON.stringify(checkFile, null, 2),
+      );
+
+      const out = await new Deno.Command(Deno.execPath(), {
+        args: ["run", "-A", "./tests/fixture_update_check/mod.ts"],
+        env: {
+          HOME: tmpDirName,
+          LATEST_VERSION: versions[0],
+          CURRENT_VERSION: "99999.9999.0",
+        },
+      }).output();
+
+      const { stdout, stderr } = getStdOutput(out);
+
+      assertNotMatch(stdout, /Fresh .* is available/);
+
+      console.log(stdout);
+      console.log(stderr);
+      const checkFileAfter = JSON.parse(
+        await Deno.readTextFile(
+          join(tmpDirName, "latest.json"),
+        ),
+      );
+
+      assert(
+        typeof checkFileAfter.last_shown === "string",
+        "Did not write last_shown " + JSON.stringify(checkFileAfter, null, 2),
+      );
+
+      await Deno.remove(tmpDirName, { recursive: true });
+    });
+
+    await t.step(
+      "doesn't show update if last_shown + interval >= today",
+      () => {
+        //
+      },
+    );
+
+    await t.step("shows update if last_shown + interval < today", () => {
+      //
+    });
   },
 });
